@@ -1,202 +1,103 @@
 # terraform-iona-ecs-service
 
-A Terraform module for deploying ECS services or scheduled tasks on AWS. It creates a task definition, container definition, CloudWatch log groups, and — depending on `service_type` — either an ECS service with optional load balancing or an EventBridge-triggered scheduled task.
+An ECS service with an ALB target group, suitable for routing to from an ALB.
 
-## Service Types
+This repo consolidates the following repos:
+* https://github.com/mergermarket/terraform-acuris-ecs-service
+* https://github.com/mergermarket/terraform-acuris-load-balanced-ecs-service-no-target-group
+* https://github.com/mergermarket/terraform-acuris-task-definition-with-task-role
+* https://github.com/mergermarket/terraform-acuris-ecs-container-definition
 
-The `service_type` variable controls what kind of ECS workload is created:
+The "ecs-service-no-target-group" used a series of "if-then" statements to determine which "type" of ecs service to create. Because this required some values to be known before the module ran, it was impossible to create the ecs service and the corresponding target group at the same time. To get around that, we use a new variable named service_type that can be one of the following values:
+* service
+* service_multiple_load_balancers
+* service_no_load_balancer
+* service_for_awsvpc_no_loadbalancer
 
-| Value | Description |
-|---|---|
-| `service` (default) | A standard ECS service fronted by a single ALB target group. Creates the service, an IAM role for ECS, placement strategies, capacity provider strategy, app autoscaling, and a deployment monitor. |
-| `service_multiple_load_balancers` | Same as `service` but accepts multiple target group ARNs via `multiple_target_group_arns`, allowing the service to register with more than one load balancer. |
-| `service_no_load_balancer` | An ECS service with no load balancer attached. Useful for worker processes or consumers that don't receive inbound HTTP traffic. |
-| `service_for_awsvpc_no_loadbalancer` | An ECS service using `awsvpc` network mode with no load balancer. Requires `network_configuration_subnets` and `network_configuration_security_groups`. |
-| `scheduled_task` | No long-running service is created. Instead, an EventBridge rule triggers `ecs:RunTask` on a schedule. The ECS service, deployment monitor, and autoscaling resources are all skipped. Requires `schedule_expression`. |
+I've only ever used the first of these, so I'm unsire what the others are for, but they are included for completeness
 
-## Usage
 
-### Standard service with ALB
+# Fluent-bit logs
 
-```hcl
-module "ecs_service" {
-  source = "ION-Analytics/ecs-service/iona"
+This repo now allows logging through Firelens/Fluent-bit into Datadog.
 
-  env              = terraform.workspace
-  ecs_cluster      = "my-cluster"
-  release          = var.release
-  image_id         = var.docker["image"]
-  platform_config  = module.platform_config.config
-  port             = "8080"
-  cpu              = "256"
-  memory           = "512"
-  target_group_arn = aws_alb_target_group.service.arn
-}
+You can now override the log_configuration variable and pass an optional firelens_configuration variable that will configure the sidecar and fluentbit process. The firehose delivery stream must have already been setup outside of this module.
+
 ```
-
-### Scheduled task
-
-```hcl
-module "ecs_scheduled_task" {
-  source = "ION-Analytics/ecs-service/iona"
-
-  service_type        = "scheduled_task"
-  schedule_expression = "rate(5 minutes)"
-
-  env             = terraform.workspace
-  ecs_cluster     = "my-cluster"
-  release         = var.release
-  image_id        = var.docker["image"]
-  platform_config = module.platform_config.config
-  cpu             = "256"
-  memory          = "512"
-  # port is not required (defaults to "0")
-}
-```
-
-## Requirements
-
-| Name | Version |
-|---|---|
-| terraform | >= 1.5.7 |
-| aws | (any) |
-
-## Modules
-
-| Name | Source | Description |
-|---|---|---|
-| `service_container_definition` | `./container-definition` | Builds the ECS container definition JSON |
-| `taskdef` | `./taskdef` | Creates the ECS task definition, task role, and execution role |
-| `service` | `./service` | Creates the ECS service (skipped for `scheduled_task`) |
-| `ecs_update_monitor` | `mergermarket/ecs-update-monitor/acuris` | Monitors ECS deployments (skipped for `scheduled_task`) |
-
-## Resources
-
-| Name | Type | Condition |
-|---|---|---|
-| `aws_cloudwatch_log_group.stdout` | resource | Always |
-| `aws_cloudwatch_log_group.stderr` | resource | Always |
-| `aws_cloudwatch_log_subscription_filter.kinesis_log_stdout_stream` | resource | When Datadog log subscription ARN is set and `add_datadog_feed` is true |
-| `aws_cloudwatch_log_subscription_filter.kinesis_log_stderr_stream` | resource | Same as above |
-| `aws_appautoscaling_target.ecs` | resource | Not `scheduled_task` |
-| `aws_appautoscaling_scheduled_action.scale_down` | resource | Not `scheduled_task`, not live, `allow_overnight_scaledown` |
-| `aws_appautoscaling_scheduled_action.scale_back_up` | resource | Same as above |
-| `aws_appautoscaling_policy.task_scaling_policy` | resource | Not `scheduled_task`, `scaling_metrics` provided |
-| `aws_cloudwatch_event_rule.scheduled_task` | resource | `scheduled_task` only |
-| `aws_cloudwatch_event_target.scheduled_task` | resource | `scheduled_task` only |
-| `aws_iam_role.scheduled_task_events` | resource | `scheduled_task` only |
-| `aws_iam_role_policy.scheduled_task_events` | resource | `scheduled_task` only |
-| `data.aws_ecs_cluster.cluster` | data | `scheduled_task` only |
-
-## Inputs
-
-| Name | Description | Type | Default | Required |
-|---|---|---|---|---|
-| `env` | Environment name | `string` | — | yes |
-| `release` | Metadata about the release (`component`, `team`, `version`, `image_id`) | `map(string)` | — | yes |
-| `cpu` | CPU unit reservation for the container | `string` | — | yes |
-| `memory` | Memory reservation for the container in megabytes | `string` | — | yes |
-| `service_type` | Type of ECS workload to create (see Service Types above) | `string` | `"service"` | no |
-| `platform_config` | Platform configuration map | `map(string)` | `{}` | no |
-| `secrets` | Secret credentials fetched using credstash | `map(string)` | `{}` | no |
-| `common_application_environment` | Environment parameters passed to the container for all environments | `map(string)` | `{}` | no |
-| `application_environment` | Environment-specific parameters passed to the container | `map(string)` | `{}` | no |
-| `ecs_cluster` | The ECS cluster name | `string` | `"default"` | no |
-| `port` | The port the container listens on. Not required for `scheduled_task`. | `string` | `"0"` | no |
-| `privileged` | Give the container privileged access to the host | `bool` | `false` | no |
-| `nofile_soft_ulimit` | Soft ulimit for number of open files | `string` | `"4096"` | no |
-| `desired_count` | Number of task instances to keep running (services only) | `string` | `"3"` | no |
-| `name_suffix` | Suffix appended to the service name for multiple services per component | `string` | `""` | no |
-| `target_group_arn` | ALB target group ARN (for `service` type) | `string` | `""` | no |
-| `multiple_target_group_arns` | Multiple ALB target group ARNs (for `service_multiple_load_balancers`) | `list(any)` | `[]` | no |
-| `task_role_policy` | IAM policy document for the task role | `string` | sts:GetCallerIdentity | no |
-| `assume_role_policy` | IAM assume role policy document | `string` | `""` | no |
-| `taskdef_volume` | Map with `name` and `host_path` for a task definition volume | `map(string)` | `{}` | no |
-| `container_mountpoint` | Map with `sourceVolume`, `containerPath`, and optional `readOnly` | `map(string)` | `{}` | no |
-| `container_port_mappings` | JSON array of port mappings (overrides `port` if set) | `string` | `""` | no |
-| `container_labels` | Additional Docker labels for the container | `map(string)` | `{}` | no |
-| `deployment_minimum_healthy_percent` | Minimum healthy percent during deployments | `string` | `"100"` | no |
-| `deployment_maximum_percent` | Maximum percent during deployments | `string` | `"200"` | no |
-| `deployment_circuit_breaker` | Deployment circuit breaker configuration | `object({enable, rollback})` | `{enable=false, rollback=false}` | no |
-| `deployment_timeout` | Timeout for deployment monitoring in seconds | `number` | `600` | no |
-| `log_subscription_arn` | Kinesis stream ARN for log subscription | `string` | `""` | no |
-| `add_datadog_feed` | Add subscription filter to CW log group for Datadog | `bool` | `true` | no |
-| `allow_overnight_scaledown` | Allow service to scale down overnight (non-live only) | `bool` | `true` | no |
-| `overnight_scaledown_min_count` | Minimum task count during overnight scaledown | `string` | `"0"` | no |
-| `overnight_scaledown_start_hour` | Hour (UTC) to start overnight scaledown | `string` | `"22"` | no |
-| `overnight_scaledown_end_hour` | Hour (UTC) to end overnight scaledown | `string` | `"06"` | no |
-| `scaling_metrics` | List of scaling metric configurations for target tracking | `list(any)` | `[]` | no |
-| `application_secrets` | Application secret names in AWS Secrets Manager | `list(string)` | `[]` | no |
-| `platform_secrets` | Platform secret names in AWS Secrets Manager | `list(string)` | `[]` | no |
-| `custom_secrets` | Arbitrary secret names in AWS Secrets Manager | `list(string)` | `[]` | no |
-| `image_id` | ECR image ID (overrides `release["image_id"]` if set) | `string` | `""` | no |
-| `network_mode` | Docker networking mode for the task | `string` | `"bridge"` | no |
-| `network_configuration_subnets` | Subnets for `awsvpc` network mode | `list(any)` | `[]` | no |
-| `network_configuration_security_groups` | Security groups for `awsvpc` network mode | `list(any)` | `[]` | no |
-| `pack_and_distinct` | Enable binpacking and distinct-instance placement | `string` | `"false"` | no |
-| `stop_timeout` | Seconds before container is forcefully killed (max 120) | `string` | `"120"` | no |
-| `health_check_grace_period_seconds` | Grace period for load balancer health checks | `string` | `"0"` | no |
-| `placement_constraint_on_demand_only` | Constrain tasks to on-demand instances only | `bool` | `false` | no |
-| `extra_hosts` | Entries to add to `/etc/hosts` in the container | `list(object({hostname, ipAddress}))` | `[]` | no |
-| `image_build_details` | Image build metadata (used for Graviton detection) | `map(string)` | `{buildx="false", platforms=""}` | no |
-| `spot_capacity_percentage` | Percentage of tasks to run on spot instances | `number` | `33` | no |
-| `log_configuration` | Custom log driver configuration | `object` | `null` | no |
-| `firelens_configuration` | FireLens/Fluent Bit sidecar configuration | `object` | `null` | no |
-| `is_test` | For testing only — disables AWS API calls for STS and cluster lookups | `bool` | `false` | no |
-| `schedule_expression` | EventBridge schedule expression (required for `scheduled_task`), e.g. `rate(5 minutes)` or `cron(0 2 * * ? *)` | `string` | `""` | no |
-| `schedule_task_count` | Number of task instances to launch per schedule trigger | `number` | `1` | no |
-| `schedule_enabled` | Whether the EventBridge schedule rule is enabled | `bool` | `true` | no |
-
-## Outputs
-
-| Name | Description |
-|---|---|
-| `task_role_arn` | ARN of the ECS task IAM role |
-| `task_role_name` | Name of the ECS task IAM role |
-| `taskdef_arn` | ARN of the ECS task definition |
-| `stdout_name` | CloudWatch log group name for stdout |
-| `stderr_name` | CloudWatch log group name for stderr |
-| `full_service_name` | Full computed service name (`{env}-{component}{suffix}`) |
-| `use_graviton` | Whether Graviton capacity providers are in use |
-| `capacity_providers` | List of capacity provider strategy objects |
-| `schedule_rule_arn` | ARN of the EventBridge rule (empty when not `scheduled_task`) |
-| `schedule_rule_name` | Name of the EventBridge rule (empty when not `scheduled_task`) |
-
-## Fluent Bit / FireLens Logging
-
-This module supports logging through FireLens/Fluent Bit into Datadog via Kinesis Firehose. To enable it:
-
-1. Override `log_configuration` to use the `awsfirelens` log driver:
-
-```hcl
-log_configuration = {
-  logDriver = "awsfirelens"
-  options = {
-    Name            = "firehose"
-    region          = "us-west-2"
-    delivery_stream = "DatadogFirehoseStream"
+  log_configuration = {
+    logDriver = "awsfirelens"
+    options = {
+      Name = "firehose"
+      region = module.platform_config.config["region"]
+      delivery_stream = "DatadogFirehoseStream"
+    }
   }
-}
 ```
+To enable the firelens sidecar, you MUST provide a firelens_configuration variable. If you do not provide that variable, the logs will flow to cloudwatch and datadog as usual AS LONG AS you don't override the log_configuration. If you override the log_configuration in the above fashion but do not provide a firelens_configuration, ***your services will break***.
 
-2. Provide a `firelens_configuration` to enable the sidecar container:
+The sidecar is named `log_router_${var.release["component"]}${var.name_suffix}` and is sourced from `public.ecr.aws/aws-observability/aws-for-fluent-bit:stable`
 
-```hcl
-firelens_configuration = {
-  type = "fluentbit"
-  options = {
-    enable-ecs-log-metadata = "true"
-    config-file-type        = "s3"
-    config-file-value       = aws_s3_object.fluentbit_config.arn
+The sidecar gets its firelens configuration directly from the variable. You could specify something other than "fluentbit" for the type, but this module won't understand what to do with it and you'll likely end up with a broken service. These options are the only ones availble and you will probably want them as the default fluentbit config doesn't do much. This modue does not create the s3 object, the calling module should do that.
+
+The s3 object you pass for the config-file-value should be a valid fluentbit configuration snippet that will be imported into the fluentbit configuration.
+
+***The s3 bucket that object is sourced from should start with the phrase 'firelens' so that the permissions will be applied properly to the ECS Role***
+
+```
+  firelens_configuration = {
+    type = "fluentbit"
+    options = {
+      enable-ecs-log-metadata = "true"
+      config-file-type =  "s3",
+      config-file-value = aws_s3_object.fluentbit_config.arn
+    }
   }
-}
 ```
 
-> **Important:** If you set `log_configuration` to `awsfirelens` without also providing `firelens_configuration`, your service will fail to start.
+The default Fluent-bit config looks like this:
 
-> **Important:** The S3 bucket containing the Fluent Bit config must have a name starting with `firelens` so that the execution role policy grants access.
+```
+[INPUT]
+    Name forward
+    Mem_Buf_Limit 25MB
+    unix_path /var/run/fluent.sock
 
-The sidecar container is named `log_router_{component}{suffix}` and uses `public.ecr.aws/aws-observability/aws-for-fluent-bit:stable`.
+[INPUT]
+    Name forward
+    Listen 0.0.0.0
+    Port 24224
+
+[INPUT]
+    Name tcp
+    Tag firelens-healthcheck
+    Listen 127.0.0.1
+    Port 8877
+
+[FILTER]
+    Name record_modifier
+    Match *
+    Record ec2_instance_id i-0d1a7bebd0e42bc04
+    Record ecs_cluster or1-test
+    Record ecs_task_arn arn:aws:ecs:us-west-2:254076036999:task/or1-test/a87638ce0fa0408ba98d11d70dbc66b8
+    Record ecs_task_definition or1-test-cdflow-log-testing:37
+
+[OUTPUT]
+    Name null
+    Match firelens-healthcheck
+
+[OUTPUT]
+    Name firehose
+    Match cdflow-log-testing-firelens*
+    delivery_stream DatadogFirehoseStream
+    region us-west-2
+```
+
+These are all either defaults or items set up by the ECS task definition. 
+
+When you use an external configuration file, this gets added to the config:
+```
+@INCLUDE /fluent-bit/etc/external.conf
+```
 
 The contents of that file can be defined with a simple HEREDOC variable such as:
 
@@ -235,3 +136,135 @@ You can find more about configuring Fluent-bit here: https://docs.fluentbit.io/m
 
 In order to standardize our use of these logging services, I've created the following repo/module: https://github.com/ION-Analytics/terraform-iona-log-config You're welcome to use this, but it may be tailored too specifically to Backstop's needs.
 
+
+<!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name                                                                      | Version  |
+|---------------------------------------------------------------------------|----------|
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.5.7 |
+
+## Providers
+
+| Name                                              | Version |
+|---------------------------------------------------|---------|
+| <a name="provider_aws"></a> [aws](#provider\_aws) | n/a     |
+
+## Modules
+
+| Name                                                                                                                         | Source                                                        | Version |
+|------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------|---------|
+| <a name="module_ecs_update_monitor"></a> [ecs\_update\_monitor](#module\_ecs\_update\_monitor)                               | mergermarket/ecs-update-monitor/acuris                        | 2.3.5   |
+
+## Resources
+
+| Name                                                                                                                                                                               | Type     |
+|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|
+| [aws_appautoscaling_policy.task_scaling_policy](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_policy)                                 | resource |
+| [aws_appautoscaling_scheduled_action.scale_back_up](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_scheduled_action)                   | resource |
+| [aws_appautoscaling_scheduled_action.scale_down](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_scheduled_action)                      | resource |
+| [aws_appautoscaling_target.ecs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/appautoscaling_target)                                                 | resource |
+| [aws_cloudwatch_log_group.stderr](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group)                                                | resource |
+| [aws_cloudwatch_log_group.stdout](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group)                                                | resource |
+| [aws_cloudwatch_log_subscription_filter.kinesis_log_stderr_stream](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_subscription_filter) | resource |
+| [aws_cloudwatch_log_subscription_filter.kinesis_log_stdout_stream](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_subscription_filter) | resource |
+
+## Inputs
+
+| Name                                                                                                                                                    | Description                                                                                                                                                                                                                                   | Type                                                    | Default                                                                                                                                                                                  | Required |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:--------:|
+| <a name="input_add_datadog_feed"></a> [add\_datadog\_feed](#input\_add\_datadog\_feed)                                                                  | Flag to control adding subscription filter to CW loggroup                                                                                                                                                                                     | `bool`                                                  | `true`                                                                                                                                                                                   |    no    |
+| <a name="input_allow_overnight_scaledown"></a> [allow\_overnight\_scaledown](#input\_allow\_overnight\_scaledown)                                       | Allow service to be scaled down                                                                                                                                                                                                               | `bool`                                                  | `true`                                                                                                                                                                                   |    no    |
+| <a name="input_application_environment"></a> [application\_environment](#input\_application\_environment)                                               | Environment specific parameters passed to the container                                                                                                                                                                                       | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+| <a name="input_application_secrets"></a> [application\_secrets](#input\_application\_secrets)                                                           | A list of application specific secret names that can be found in aws secrets manager                                                                                                                                                          | `list(string)`                                          | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_assume_role_policy"></a> [assume\_role\_policy](#input\_assume\_role\_policy)                                                            | A valid IAM policy for assuming roles - optional                                                                                                                                                                                              | `string`                                                | `""`                                                                                                                                                                                     |    no    |
+| <a name="input_common_application_environment"></a> [common\_application\_environment](#input\_common\_application\_environment)                        | Environment parameters passed to the container for all environments                                                                                                                                                                           | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+| <a name="input_container_labels"></a> [container\_labels](#input\_container\_labels)                                                                    | Additional docker labels to apply to the container.                                                                                                                                                                                           | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+| <a name="input_container_mountpoint"></a> [container\_mountpoint](#input\_container\_mountpoint)                                                        | Map containing 'sourceVolume', 'containerPath' and 'readOnly' (optional) to map a volume into a container.                                                                                                                                    | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+| <a name="input_container_port_mappings"></a> [container\_port\_mappings](#input\_container\_port\_mappings)                                             | JSON document containing an array of port mappings for the container defintion - if set port is ignored (optional).                                                                                                                           | `string`                                                | `""`                                                                                                                                                                                     |    no    |
+| <a name="input_cpu"></a> [cpu](#input\_cpu)                                                                                                             | CPU unit reservation for the container                                                                                                                                                                                                        | `string`                                                | n/a                                                                                                                                                                                      |   yes    |
+| <a name="input_deployment_maximum_percent"></a> [deployment\_maximum\_percent](#input\_deployment\_maximum\_percent)                                    | The maximumPercent parameter represents an upper limit on the number of your service's tasks that are allowed in the RUNNING or PENDING state during a deployment, as a percentage of the desiredCount (rounded down to the nearest integer). | `string`                                                | `"200"`                                                                                                                                                                                  |    no    |
+| <a name="input_deployment_minimum_healthy_percent"></a> [deployment\_minimum\_healthy\_percent](#input\_deployment\_minimum\_healthy\_percent)          | The minimumHealthyPercent represents a lower limit on the number of your service's tasks that must remain in the RUNNING state during a deployment, as a percentage of the desiredCount (rounded up to the nearest integer).                  | `string`                                                | `"100"`                                                                                                                                                                                  |    no    |
+| <a name="input_deployment_timeout"></a> [deployment\_timeout](#input\_deployment\_timeout)                                                              | Timeout to wait for the deployment to be finished [seconds].                                                                                                                                                                                  | `number`                                                | `600`                                                                                                                                                                                    |    no    |
+| <a name="input_desired_count"></a> [desired\_count](#input\_desired\_count)                                                                             | The number of instances of the task definition to place and keep running.                                                                                                                                                                     | `string`                                                | `"3"`                                                                                                                                                                                    |    no    |
+| <a name="input_ecs_cluster"></a> [ecs\_cluster](#input\_ecs\_cluster)                                                                                   | The ECS cluster                                                                                                                                                                                                                               | `string`                                                | `"default"`                                                                                                                                                                              |    no    |
+| <a name="input_env"></a> [env](#input\_env)                                                                                                             | Environment name                                                                                                                                                                                                                              | `any`                                                   | n/a                                                                                                                                                                                      |   yes    |
+| <a name="input_extra_hosts"></a>[extra\_hosts](#input\_extra\_hosts)                                                                                    | List of objects containing 'hostname' and 'ipAddress' used to add extra /etc/hosts to the container.                                                                                                                                          | `list(object({'hostname': string 'ipAddress': string})` | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_health_check_grace_period_seconds"></a> [health\_check\_grace\_period\_seconds](#input\_health\_check\_grace\_period\_seconds)           | Seconds to ignore failing load balancer health checks on newly instantiated tasks to prevent premature shutdown, up to 2147483647. Default 0.                                                                                                 | `string`                                                | `"0"`                                                                                                                                                                                    |    no    |
+| <a name="input_image_id"></a> [image\_id](#input\_image\_id)                                                                                            | ECR image\_id for the ecs container                                                                                                                                                                                                           | `string`                                                | `""`                                                                                                                                                                                     |    no    |
+| <a name="input_is_test"></a> [is\_test](#input\_is\_test)                                                                                               | For testing only. Stops the call to AWS for sts                                                                                                                                                                                               | `bool`                                                  | `false`                                                                                                                                                                                  |    no    |
+| <a name="input_log_subscription_arn"></a> [log\_subscription\_arn](#input\_log\_subscription\_arn)                                                      | To enable logging to a kinesis stream                                                                                                                                                                                                         | `string`                                                | `""`                                                                                                                                                                                     |    no    |
+| <a name="input_memory"></a> [memory](#input\_memory)                                                                                                    | The memory reservation for the container in megabytes                                                                                                                                                                                         | `string`                                                | n/a                                                                                                                                                                                      |   yes    |
+| <a name="input_multiple_target_group_arns"></a> [multiple\_target\_group\_arns](#input\_multiple\_target\_group\_arns)                                  | Mutiple target group ARNs to allow connection to multiple loadbalancers                                                                                                                                                                       | `list(any)`                                             | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_name_suffix"></a> [name\_suffix](#input\_name\_suffix)                                                                                   | Set a suffix that will be applied to the name in order that a component can have multiple services per environment                                                                                                                            | `string`                                                | `""`                                                                                                                                                                                     |    no    |
+| <a name="input_network_configuration_security_groups"></a> [network\_configuration\_security\_groups](#input\_network\_configuration\_security\_groups) | needed for network\_mode awsvpc                                                                                                                                                                                                               | `list(any)`                                             | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_network_configuration_subnets"></a> [network\_configuration\_subnets](#input\_network\_configuration\_subnets)                           | needed for network\_mode awsvpc                                                                                                                                                                                                               | `list(any)`                                             | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_network_mode"></a> [network\_mode](#input\_network\_mode)                                                                                | The Docker networking mode to use for the containers in the task                                                                                                                                                                              | `string`                                                | `"bridge"`                                                                                                                                                                               |    no    |
+| <a name="input_nofile_soft_ulimit"></a> [nofile\_soft\_ulimit](#input\_nofile\_soft\_ulimit)                                                            | The soft ulimit for the number of files in container                                                                                                                                                                                          | `string`                                                | `"4096"`                                                                                                                                                                                 |    no    |
+| <a name="input_overnight_scaledown_end_hour"></a> [overnight\_scaledown\_end\_hour](#input\_overnight\_scaledown\_end\_hour)                            | When to bring service back to full strength (Hour in UTC)                                                                                                                                                                                     | `string`                                                | `"06"`                                                                                                                                                                                   |    no    |
+| <a name="input_overnight_scaledown_min_count"></a> [overnight\_scaledown\_min\_count](#input\_overnight\_scaledown\_min\_count)                         | Minimum task count overnight                                                                                                                                                                                                                  | `string`                                                | `"0"`                                                                                                                                                                                    |    no    |
+| <a name="input_overnight_scaledown_start_hour"></a> [overnight\_scaledown\_start\_hour](#input\_overnight\_scaledown\_start\_hour)                      | From when a service can be scaled down (Hour in UTC)                                                                                                                                                                                          | `string`                                                | `"22"`                                                                                                                                                                                   |    no    |
+| <a name="input_pack_and_distinct"></a> [pack\_and\_distinct](#input\_pack\_and\_distinct)                                                               | Enable distinct instance and task binpacking for better cluster utilisation. Enter 'true' for clusters with auto scaling groups. Enter 'false' for clusters with no ASG and instant counts less than or equal to desired tasks                | `string`                                                | `"false"`                                                                                                                                                                                |    no    |
+| <a name="input_platform_config"></a> [platform\_config](#input\_platform\_config)                                                                       | Platform configuration                                                                                                                                                                                                                        | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+| <a name="input_platform_secrets"></a> [platform\_secrets](#input\_platform\_secrets)                                                                    | A list of common secret names for "the platform" that can be found in secrets manager                                                                                                                                                         | `list(string)`                                          | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_custom_secrets"></a> [custom\_secrets](#input\_custom\_secrets)                                                                    | A list of secret names that can be referenced by multiple services                                                                                                                                                        | `list(string)`                                          | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_port"></a> [port](#input\_port)                                                                                                          | The port that container will be running on                                                                                                                                                                                                    | `string`                                                | n/a                                                                                                                                                                                      |   yes    |
+| <a name="input_privileged"></a> [privileged](#input\_privileged)                                                                                        | Gives the container privileged access to the host                                                                                                                                                                                             | `bool`                                                  | `false`                                                                                                                                                                                  |    no    |
+| <a name="input_release"></a> [release](#input\_release)                                                                                                 | Metadata about the release                                                                                                                                                                                                                    | `map(string)`                                           | n/a                                                                                                                                                                                      |   yes    |
+| <a name="input_scaling_metrics"></a> [scaling\_metrics](#input\_scaling\_metrics)                                                                       | A list of maps defining the scaling of the services tasks - for more info see below                                                                                                                                                           | `list(any)`                                             | `[]`                                                                                                                                                                                     |    no    |
+| <a name="input_secrets"></a> [secrets](#input\_secrets)                                                                                                 | Secret credentials fetched using credstash                                                                                                                                                                                                    | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+| <a name="input_stop_timeout"></a> [stop\_timeout](#input\_stop\_timeout)                                                                                | The duration is seconds to wait before the container is forcefully killed. Default 30s, max 120s.                                                                                                                                             | `string`                                                | `"none"`                                                                                                                                                                                 |    no    |
+| <a name="input_target_group_arn"></a> [target\_group\_arn](#input\_target\_group\_arn)                                                                  | The ALB target group for the service.                                                                                                                                                                                                         | `string`                                                | `""`                                                                                                                                                                                     |    no    |
+| <a name="input_task_role_policy"></a> [task\_role\_policy](#input\_task\_role\_policy)                                                                  | IAM policy document to apply to the tasks via a task role                                                                                                                                                                                     | `string`                                                | `"{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Action\": \"sts:GetCallerIdentity\",\n      \"Effect\": \"Allow\",\n      \"Resource\": \"*\"\n    }\n  ]\n}\n"` |    no    |
+| <a name="input_taskdef_volume"></a> [taskdef\_volume](#input\_taskdef\_volume)                                                                          | Map containing 'name' and 'host\_path' used to add a volume mapping to the taskdef.                                                                                                                                                           | `map(string)`                                           | `{}`                                                                                                                                                                                     |    no    |
+## Outputs
+
+| Name                                                                                        | Description |
+|---------------------------------------------------------------------------------------------|-------------|
+| <a name="output_full_service_name"></a> [full\_service\_name](#output\_full\_service\_name) | n/a         |
+| <a name="output_stderr_name"></a> [stderr\_name](#output\_stderr\_name)                     | n/a         |
+| <a name="output_stdout_name"></a> [stdout\_name](#output\_stdout\_name)                     | n/a         |
+| <a name="output_task_role_arn"></a> [task\_role\_arn](#output\_task\_role\_arn)             | n/a         |
+| <a name="output_task_role_name"></a> [task\_role\_name](#output\_task\_role\_name)          | n/a         |
+| <a name="output_taskdef_arn"></a> [taskdef\_arn](#output\_taskdef\_arn)                     | n/a         |
+
+## Scaling Metrics
+
+Setting this variable to a lis tof maps.  Each map defines a seperate scaling policy
+
+| Param              | Description                                                                                                                                                                                        |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| name               | (Required) Must be unique                                                                                                                                                                          |
+| metric             | (Required) Name of the metric to use for scaling - see below for allowed values                                                                                                                    |
+| target_value       | (Required) Value of the above metric that scaling will maintain                                                                                                                                    |
+| disable_scale_in   | (Optional) Whether scale in by the target tracking policy is disabled. If the value is true, scale in is disabled and the target tracking policy won't remove capacity from the scalable resource. |
+| scale_in_cooldown  | (Optional) Amount of time, in seconds, after a scale in activity completes before another scale in activity can start                                                                              |
+| scale_out_cooldown | (Optional) Amount of time, in seconds, after a scale out activity completes before another scale out activity can start.                                                                           |
+
+### Allowed Metrics
+* ECSServiceAverageCPUUtilization
+* ECSServiceAverageMemoryUtilization
+* ALBRequestCountPerTarget
+
+### Example
+```
+  scaling_metrics = [
+    {
+      name               = "cpu"
+      metric             = "ECSServiceAverageCPUUtilization"
+      target_value       = 10
+      disable_scale_in   = false
+      scale_in_cooldown  = 180
+      scale_out_cooldown = 90
+    },
+    {
+      name               = "memory"
+      metric             = "ECSServiceAverageMemoryUtilization"
+      target_value       = 10
+      disable_scale_in   = false
+      scale_in_cooldown  = 180
+      scale_out_cooldown = 90
+    }
+  ]
+```
+<!-- END_TF_DOCS -->

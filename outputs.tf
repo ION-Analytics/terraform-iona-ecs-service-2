@@ -29,11 +29,3 @@ output "use_graviton" {
 output "capacity_providers" {
   value = local.capacity_providers
 }
-
-output "schedule_rule_arn" {
-  value = var.service_type == "scheduled_task" ? try(aws_cloudwatch_event_rule.scheduled_task[0].arn, "") : ""
-}
-
-output "schedule_rule_name" {
-  value = var.service_type == "scheduled_task" ? try(aws_cloudwatch_event_rule.scheduled_task[0].name, "") : ""
-}
