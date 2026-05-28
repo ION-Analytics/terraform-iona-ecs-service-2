@@ -15,7 +15,7 @@ variable "release" {
 
 variable "service_type" {
   type        = string
-  description = "The type of service to create, e.g. service, service_multiple_load_balancers, service_no_load_balancer, service_for_awsvpc_no_loadbalancer, scheduled_task"
+  description = "The type of service to create, e.g. service, service_multiple_load_balancers, service_no_load_balancer,service_for_awsvpc_no_loadbalancer"
   default     = "service"
 }
 
@@ -46,7 +46,6 @@ variable "ecs_cluster" {
 variable "port" {
   type        = string
   description = "The port that container will be running on"
-  default     = "0"
 }
 
 variable "cpu" {
@@ -324,22 +323,4 @@ variable "deployment_circuit_breaker" {
     enable   = false
     rollback = false
     }
-}
-
-variable "schedule_expression" {
-  description = "The scheduling expression. For example, cron(0 2 * * ? *) or rate(1 hour). Required when service_type is scheduled_task."
-  type        = string
-  default     = ""
-}
-
-variable "schedule_task_count" {
-  description = "The number of task instances to launch per schedule trigger."
-  type        = number
-  default     = 1
-}
-
-variable "schedule_enabled" {
-  description = "Whether the EventBridge schedule rule is enabled."
-  type        = bool
-  default     = true
 }
