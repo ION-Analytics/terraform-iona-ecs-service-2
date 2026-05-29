@@ -6,6 +6,21 @@ terraform {
   }
 }
 
+moved {
+  from = module.service
+  to   = module.service[0]
+}
+
+moved {
+  from = module.ecs_update_monitor
+  to   = module.ecs_update_monitor[0]
+}
+
+moved {
+  from = aws_appautoscaling_target.ecs
+  to   = aws_appautoscaling_target.ecs[0]
+}
+
 locals {
   service_name      = "${var.env}-${var.release["component"]}"
   full_service_name = "${local.service_name}${var.name_suffix}"
