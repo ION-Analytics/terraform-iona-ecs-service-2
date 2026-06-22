@@ -84,10 +84,62 @@ module "service_container_definition" {
   extra_hosts = var.extra_hosts
 }
 
+module "sidecar_container_definition" {
+  source = "./container-definition"
+  count  = var.sidecar_container != null ? 1 : 0
+
+  container_name      = var.sidecar_container.name
+  container_image     = var.sidecar_container.image
+  container_cpu       = try(tonumber(var.sidecar_container.cpu), tonumber(var.cpu))
+  privileged          = var.sidecar_container.privileged
+  container_memory    = try(tonumber(var.sidecar_container.memory), tonumber(var.memory))
+  stop_timeout        = tonumber(var.stop_timeout)
+  application_secrets = var.application_secrets
+  platform_secrets    = var.platform_secrets
+  custom_secrets      = var.custom_secrets
+  platform_config     = var.platform_config
+  port_mappings       = var.sidecar_container.port_mappings != null ? var.sidecar_container.port_mappings : (var.sidecar_container.port != "0" ? [{ containerPort = tonumber(var.sidecar_container.port) }] : [])
+  mount_points        = var.sidecar_container.mount_points != null ? var.sidecar_container.mount_points : [var.container_mountpoint]
+  ulimits = [{
+    name      = "nofile"
+    hardLimit = 65535
+    softLimit = var.nofile_soft_ulimit
+  }]
+  log_configuration   = var.sidecar_container.log_configuration != null ? var.sidecar_container.log_configuration : (var.log_configuration != null ? var.log_configuration : null)
+
+  map_environment = merge({
+    "LOGSPOUT_CLOUDWATCHLOGS_LOG_GROUP_STDOUT" = "${local.full_service_name}-${var.sidecar_container.name}-stdout"
+    "LOGSPOUT_CLOUDWATCHLOGS_LOG_GROUP_STDERR" = "${local.full_service_name}-${var.sidecar_container.name}-stderr"
+    "STATSD_HOST"                              = "172.17.42.1"
+    "STATSD_PORT"                              = "8125"
+    "STATSD_ENABLED"                           = "true"
+    "ENV_NAME"                                 = var.env
+    "COMPONENT_NAME"                           = var.release["component"]
+    "VERSION"                                  = var.release["version"]
+    },
+    var.common_application_environment,
+    var.application_environment,
+    var.secrets,
+    var.sidecar_container.map_environment,
+  )
+  docker_labels = merge(
+    {
+      "component"             = var.release["component"]
+      "env"                   = var.env
+      "team"                  = var.release["team"]
+      "version"               = var.release["version"]
+      "com.datadoghq.ad.logs" = "[{\"source\": \"amazon_ecs\", \"service\": \"${local.full_service_name}-${var.sidecar_container.name}\"}]"
+    },
+    var.sidecar_container.container_labels,
+  )
+  extra_hosts = var.extra_hosts
+}
+
 locals {
   complete_container_definition = concat(
     [ for sidecar in local.firelens_container_definition : sidecar if var.firelens_configuration != null],
-    [ module.service_container_definition.json_map_object ]
+    [ module.service_container_definition.json_map_object ],
+    var.sidecar_container != null ? [ module.sidecar_container_definition[0].json_map_object ] : []
   )
   firelens_container_definition = [{
     name = "log_router_${var.release["component"]}${var.name_suffix}",
@@ -226,6 +278,38 @@ resource "aws_cloudwatch_log_subscription_filter" "kinesis_log_stderr_stream" {
   role_arn        = lookup(var.platform_config, "datadog_log_subscription_role_arn", null)
   filter_pattern  = ""
   depends_on      = [aws_cloudwatch_log_group.stderr]
+}
+
+resource "aws_cloudwatch_log_group" "sidecar_stdout" {
+  count             = var.sidecar_container != null ? 1 : 0
+  name              = "${local.full_service_name}-${var.sidecar_container.name}-stdout"
+  retention_in_days = "7"
+}
+
+resource "aws_cloudwatch_log_group" "sidecar_stderr" {
+  count             = var.sidecar_container != null ? 1 : 0
+  name              = "${local.full_service_name}-${var.sidecar_container.name}-stderr"
+  retention_in_days = "7"
+}
+
+resource "aws_cloudwatch_log_subscription_filter" "kinesis_log_sidecar_stdout_stream" {
+  count           = var.sidecar_container != null && var.platform_config["datadog_log_subscription_arn"] != "" && var.add_datadog_feed ? 1 : 0
+  name            = "kinesis-log-sidecar-stdout-stream-${local.service_name}-${var.sidecar_container.name}"
+  destination_arn = var.platform_config["datadog_log_subscription_arn"]
+  log_group_name  = "${local.full_service_name}-${var.sidecar_container.name}-stdout"
+  role_arn        = lookup(var.platform_config, "datadog_log_subscription_role_arn", null)
+  filter_pattern  = ""
+  depends_on      = [aws_cloudwatch_log_group.sidecar_stdout]
+}
+
+resource "aws_cloudwatch_log_subscription_filter" "kinesis_log_sidecar_stderr_stream" {
+  count           = var.sidecar_container != null && var.platform_config["datadog_log_subscription_arn"] != "" && var.add_datadog_feed ? 1 : 0
+  name            = "kinesis-log-sidecar-stderr-stream-${local.service_name}-${var.sidecar_container.name}"
+  destination_arn = var.platform_config["datadog_log_subscription_arn"]
+  log_group_name  = "${local.full_service_name}-${var.sidecar_container.name}-stderr"
+  role_arn        = lookup(var.platform_config, "datadog_log_subscription_role_arn", null)
+  filter_pattern  = ""
+  depends_on      = [aws_cloudwatch_log_group.sidecar_stderr]
 }
 
 resource "aws_appautoscaling_target" "ecs" {

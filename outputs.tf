@@ -37,3 +37,18 @@ output "schedule_rule_arn" {
 output "schedule_rule_name" {
   value = var.service_type == "scheduled_task" ? try(aws_cloudwatch_event_rule.scheduled_task[0].name, "") : ""
 }
+
+output "sidecar_stdout_name" {
+  value = var.sidecar_container != null ? aws_cloudwatch_log_group.sidecar_stdout[0].name : ""
+  description = "CloudWatch log group name for sidecar stdout (empty if no sidecar)"
+}
+
+output "sidecar_stderr_name" {
+  value = var.sidecar_container != null ? aws_cloudwatch_log_group.sidecar_stderr[0].name : ""
+  description = "CloudWatch log group name for sidecar stderr (empty if no sidecar)"
+}
+
+output "sidecar_container_name" {
+  value = var.sidecar_container != null ? var.sidecar_container.name : ""
+  description = "Name of the sidecar container (empty if no sidecar)"
+}

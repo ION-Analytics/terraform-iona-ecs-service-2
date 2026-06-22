@@ -1,8 +1,24 @@
-# terraform-iona-ecs-service
+# terraform-iona-ecs-service-2
+
+**Fork of terraform-iona-ecs-service with sidecar container support**
 
 A Terraform module for deploying ECS services or scheduled tasks on AWS. It creates a task definition, container definition, CloudWatch log groups, and — depending on `service_type` — either an ECS service with optional load balancing or an EventBridge-triggered scheduled task.
 
 All service types support ECS Exec, capacity provider strategies (including Graviton and Spot), AWS Secrets Manager integration, and optional FireLens/Fluent Bit log routing.
+
+## 🆕 What's New: Sidecar Container Support
+
+This fork adds support for running a **second container** alongside your main application in the same ECS task. Perfect for:
+
+- **Monitoring/Metrics**: Prometheus exporters, StatsD collectors
+- **Logging**: Log shippers, aggregators  
+- **Proxies**: Nginx, Envoy for traffic management
+- **Security**: Vault agents, secrets managers
+- **Service Mesh**: Linkerd, Istio sidecars
+
+**100% backwards compatible** — existing configurations work unchanged. Simply add a `sidecar_container` block when needed.
+
+See [Sidecar Container Usage](#sidecar-container-usage) below for examples and full documentation in [SIDECAR_CHANGES.md](./SIDECAR_CHANGES.md).
 
 ## Usage
 
@@ -80,6 +96,38 @@ module "ecs_scheduled_task" {
 }
 ```
 
+### Service with sidecar container
+
+```hcl
+module "ecs_service_with_sidecar" {
+  source = "ION-Analytics/ecs-service/iona"
+
+  env              = terraform.workspace
+  ecs_cluster      = "my-cluster"
+  release          = var.release
+  image_id         = var.docker["image"]
+  platform_config  = module.platform_config.config
+  port             = "8080"
+  cpu              = "256"
+  memory           = "512"
+  target_group_arn = aws_alb_target_group.service.arn
+  
+  # Add a sidecar container for metrics export
+  sidecar_container = {
+    name   = "prometheus-exporter"
+    image  = "prom/statsd-exporter:v0.26.0"
+    cpu    = "128"
+    memory = "256"
+    port   = "9102"
+    
+    map_environment = {
+      STATSD_LISTEN_UDP = "0.0.0.0:8125"
+      PROM_LISTEN_HTTP  = "0.0.0.0:9102"
+    }
+  }
+}
+```
+
 ## Service Types
 
 The `service_type` variable controls what kind of ECS workload is created:
@@ -91,6 +139,86 @@ The `service_type` variable controls what kind of ECS workload is created:
 | `service_no_load_balancer` | An ECS service with no load balancer attached. Useful for worker processes or consumers that don't receive inbound HTTP traffic. |
 | `service_for_awsvpc_no_loadbalancer` | An ECS service using `awsvpc` network mode with no load balancer. Requires `network_configuration_subnets` and `network_configuration_security_groups`. |
 | `scheduled_task` | No long-running service is created. Instead, an EventBridge rule triggers `ecs:RunTask` on a schedule. The ECS service, deployment monitor, and autoscaling resources are all skipped. Requires `schedule_expression`. |
+
+## Sidecar Container Usage
+
+### Overview
+
+The `sidecar_container` variable allows you to run a second container alongside your main application container in the same ECS task. The sidecar automatically inherits most configuration from the main container (secrets, environment variables, timeouts, etc.) while allowing you to specify container-specific settings.
+
+### Required Fields
+
+| Name | Description | Type |
+|---|---|---|
+| `name` | Container name | `string` |
+| `image` | Docker image | `string` |
+
+### Optional Fields
+
+| Name | Description | Type | Default |
+|---|---|---|---|
+| `cpu` | CPU units | `string` | Main container's CPU |
+| `memory` | Memory in MB | `string` | Main container's memory |
+| `port` | Single container port | `string` | `"0"` (no port) |
+| `port_mappings` | Multiple port mappings (overrides `port`) | `list(object)` | Based on `port` |
+| `privileged` | Run with elevated privileges | `bool` | `false` |
+| `map_environment` | Additional environment variables | `map(string)` | `{}` |
+| `mount_points` | Volume mounts | `list(object)` | Main container's mountpoint |
+| `container_labels` | Docker labels | `map(string)` | `{}` |
+| `log_configuration` | Custom log config | `object` | Main container's log config |
+
+### Shared Configuration
+
+The sidecar automatically inherits:
+- All secrets (`application_secrets`, `platform_secrets`, `custom_secrets`)
+- Environment variables (`common_application_environment`, `application_environment`, `secrets`)
+- Timeouts (`stop_timeout`)
+- Resource limits (`ulimits`)
+- Host entries (`extra_hosts`)
+
+### Logging
+
+Each sidecar gets separate CloudWatch log groups:
+- `${service_name}-${sidecar_name}-stdout`
+- `${service_name}-${sidecar_name}-stderr`
+
+### Examples
+
+#### Metrics Exporter
+```hcl
+sidecar_container = {
+  name   = "prometheus-exporter"
+  image  = "prom/statsd-exporter:v0.26.0"
+  cpu    = "128"
+  memory = "256"
+  port   = "9102"
+}
+```
+
+#### Nginx Proxy
+```hcl
+sidecar_container = {
+  name   = "nginx-proxy"
+  image  = "nginx:latest"
+  cpu    = "256"
+  memory = "512"
+  
+  port_mappings = [
+    { containerPort = 80 },
+    { containerPort = 443 }
+  ]
+  
+  mount_points = [
+    {
+      containerPath = "/etc/nginx/conf.d"
+      sourceVolume  = "nginx-config"
+      readOnly      = true
+    }
+  ]
+}
+```
+
+For complete documentation, see [SIDECAR_CHANGES.md](./SIDECAR_CHANGES.md).
 
 ## Requirements
 
@@ -273,6 +401,12 @@ Created when `service_type = "scheduled_task"`:
 | `schedule_task_count` | Number of task instances to launch per schedule trigger | `number` | `1` |
 | `schedule_enabled` | Whether the EventBridge schedule rule is enabled | `bool` | `true` |
 
+### Sidecar Container
+
+| Name | Description | Type | Default |
+|---|---|---|---|
+| `sidecar_container` | Optional sidecar container configuration (see [Sidecar Container Usage](#sidecar-container-usage)) | `object` | `null` |
+
 ### Testing
 
 | Name | Description | Type | Default |
@@ -293,6 +427,9 @@ Created when `service_type = "scheduled_task"`:
 | `capacity_providers` | List of capacity provider strategy objects |
 | `schedule_rule_arn` | ARN of the EventBridge rule (empty string when not `scheduled_task`) |
 | `schedule_rule_name` | Name of the EventBridge rule (empty string when not `scheduled_task`) |
+| `sidecar_stdout_name` | CloudWatch log group name for sidecar stdout (empty if no sidecar) |
+| `sidecar_stderr_name` | CloudWatch log group name for sidecar stderr (empty if no sidecar) |
+| `sidecar_container_name` | Name of the sidecar container (empty if no sidecar) |
 
 ## Capacity Provider Strategy
 

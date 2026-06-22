@@ -343,3 +343,38 @@ variable "schedule_enabled" {
   type        = bool
   default     = true
 }
+
+variable "sidecar_container" {
+  description = "Optional sidecar container configuration. Shares most task definition values with the main container (secrets, environment, timeouts). Specify container-specific values: name, image, cpu, memory, port, privileged, and any unique settings."
+  type = object({
+    name       = string
+    image      = string
+    cpu        = optional(string)
+    memory     = optional(string)
+    port       = optional(string, "0")
+    privileged = optional(bool, false)
+    map_environment = optional(map(string), {})
+    port_mappings = optional(list(object({
+      containerPort = number
+      hostPort      = optional(number)
+      protocol      = optional(string)
+      name          = optional(string)
+      appProtocol   = optional(string)
+    })))
+    mount_points = optional(list(object({
+      containerPath = optional(string)
+      readOnly      = optional(bool)
+      sourceVolume  = optional(string)
+    })))
+    container_labels = optional(map(string), {})
+    log_configuration = optional(object({
+      logDriver = string
+      options   = optional(map(string))
+      secretOptions = optional(list(object({
+        name      = string
+        valueFrom = string
+      })))
+    }))
+  })
+  default = null
+}

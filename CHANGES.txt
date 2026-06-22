@@ -1,0 +1,57 @@
+# File Changes Summary
+
+## Modified Files
+
+### main.tf
+- Added module.sidecar_container_definition (lines 87-136)
+  - Conditionally created when sidecar_container != null
+  - Reuses container-definition submodule
+  - Shares secrets, environment, timeouts with main container
+  
+- Updated local.complete_container_definition (lines 138-142)
+  - Added sidecar to container array if configured
+  
+- Added sidecar CloudWatch log groups (lines 281-318)
+  - aws_cloudwatch_log_group.sidecar_stdout
+  - aws_cloudwatch_log_group.sidecar_stderr
+  - aws_cloudwatch_log_subscription_filter.kinesis_log_sidecar_stdout_stream
+  - aws_cloudwatch_log_subscription_filter.kinesis_log_sidecar_stderr_stream
+
+### variables.tf
+- Added variable.sidecar_container (lines 348-383)
+  - Object type with required fields: name, image
+  - Optional fields: cpu, memory, port, privileged, environment, labels, etc.
+  - Defaults to null for backwards compatibility
+
+### outputs.tf
+- Added output.sidecar_stdout_name (lines 42-45)
+- Added output.sidecar_stderr_name (lines 47-50)
+- Added output.sidecar_container_name (lines 52-55)
+
+## New Files
+
+### Documentation
+- README.md - Updated with sidecar usage section
+- SIDECAR_CHANGES.md - Detailed technical documentation
+- SUMMARY.md - Implementation summary
+- CHANGES.txt - This file
+
+### Examples
+- examples/with-sidecar.tf - Complete working example
+- examples/comparison.md - Backwards compatibility demonstration
+
+## Unchanged Files
+
+All submodules remain unchanged:
+- taskdef/ - No changes
+- container-definition/ - No changes
+- service/ - No changes
+
+## Line Count Changes
+
+main.tf: +100 lines (module + resources)
+variables.tf: +35 lines (new variable)
+outputs.tf: +12 lines (new outputs)
+README.md: +100 lines (documentation)
+
+Total core changes: ~147 lines of Terraform code
