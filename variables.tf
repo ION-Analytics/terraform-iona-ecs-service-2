@@ -98,7 +98,7 @@ variable "multiple_target_group_arns" {
 variable "task_role_policy" {
   description = "IAM policy document to apply to the tasks via a task role"
   type        = string
-  default = <<END
+  default     = <<END
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -316,14 +316,14 @@ variable "firelens_configuration" {
 
 variable "deployment_circuit_breaker" {
   description = "Configuration block for deployment circuit breaker"
-  type        = object({
+  type = object({
     enable   = bool
     rollback = bool
   })
-  default     = {
+  default = {
     enable   = false
     rollback = false
-    }
+  }
 }
 
 variable "schedule_expression" {
@@ -342,4 +342,31 @@ variable "schedule_enabled" {
   description = "Whether the EventBridge schedule rule is enabled."
   type        = bool
   default     = true
+}
+
+variable "multiple_images" {
+  description = "Enable multi-container task definitions. When true, use the tasks variable to define multiple containers."
+  type        = bool
+  default     = false
+}
+
+variable "tasks" {
+  description = "List of container configurations for multi-container task definitions. Only used when multiple_images = true."
+  type = list(object({
+    image                   = string
+    cpu                     = string
+    memory                  = string
+    port                    = optional(string, "0")
+    container_port_mappings = optional(string, "")
+    target_group_arns       = optional(list(string), [])
+    privileged              = optional(bool, false)
+    nofile_soft_ulimit      = optional(string, "4096")
+    stop_timeout            = optional(string, "120")
+    extra_hosts = optional(list(object({
+      hostname  = string
+      ipAddress = string
+    })), [])
+    container_labels = optional(map(string), {})
+  }))
+  default = []
 }

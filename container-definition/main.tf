@@ -28,7 +28,7 @@ data "aws_secretsmanager_secret" "platform_secrets" {
 ## Attempt at doing a custom secrets path
 data "aws_secretsmanager_secret" "custom_secrets" {
   count = length(var.custom_secrets)
-  name  = "${element(var.custom_secrets, count.index)}"
+  name  = element(var.custom_secrets, count.index)
 }
 
 ## Second local block uses the above data resources to format the map of 
@@ -49,7 +49,7 @@ locals {
   ## Future attempt at doing a custom secrets path
   sorted_custom_secrets = {
     for k, v in data.aws_secretsmanager_secret.custom_secrets :
-    element(split("/", v.name), length(split("/", v.name))-1) => "${v.arn}"
+    element(split("/", v.name), length(split("/", v.name)) - 1) => "${v.arn}"
   }
 
   final_secrets = merge(local.sorted_application_secrets, local.sorted_platform_secrets, local.sorted_custom_secrets)

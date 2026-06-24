@@ -112,14 +112,14 @@ variable "pack_and_distinct" {
 
 variable "deployment_circuit_breaker" {
   description = "Configuration block for deployment circuit breaker"
-  type        = object({
+  type = object({
     enable   = bool
     rollback = bool
   })
-  default     = {
-    enable  = false
+  default = {
+    enable   = false
     rollback = false
-    }
+  }
 }
 
 variable "network_configuration_subnets" {
@@ -144,4 +144,20 @@ variable "capacity_providers" {
   description = "The capacity providers to add to the service. If the service is using the default capacity provider strategy, the service can also have one or more capacity providers specified using the capacityProviders parameter."
   type        = list(any)
   default     = []
+}
+
+variable "multiple_images" {
+  description = "Flag indicating if this service uses multi-container task definitions"
+  type        = bool
+  default     = false
+}
+
+variable "multi_container_load_balancers" {
+  description = "Load balancer configurations for multi-container tasks. List of objects with target_group_arn, container_name, and container_port."
+  type = list(object({
+    target_group_arn = string
+    container_name   = string
+    container_port   = number
+  }))
+  default = []
 }

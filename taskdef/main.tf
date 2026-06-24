@@ -103,14 +103,14 @@ data "aws_iam_policy_document" "execution-role-policy" {
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
-    resources = [ "*" ]
+    resources = ["*"]
   }
 
   statement {
     actions = [
       "s3:GetObject"
     ]
-    resources = [ "arn:aws:s3:::firelens*" ]
+    resources = ["arn:aws:s3:::firelens*"]
   }
 
   statement {
@@ -118,21 +118,21 @@ data "aws_iam_policy_document" "execution-role-policy" {
       "secretsmanager:List*",
       "secretsmanager:DescribeSecret",
     ]
-    resources = [ "*" ]
+    resources = ["*"]
   }
 
   statement {
-    actions =[
+    actions = [
       "secretsmanager:GetSecretValue"
     ]
-    resources = [ "arn:aws:secretsmanager:${data.aws_region.current.name}:${local.account_id}:secret:platform_secrets/*" ]
+    resources = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${local.account_id}:secret:platform_secrets/*"]
   }
 
   statement {
-    actions =[
+    actions = [
       "secretsmanager:GetSecretValue"
     ]
-    resources = [ "arn:aws:secretsmanager:${data.aws_region.current.name}:${local.account_id}:secret:${local.team}/${var.env}/${local.component}/*" ]
+    resources = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${local.account_id}:secret:${local.team}/${var.env}/${local.component}/*"]
   }
 
   dynamic "statement" {
@@ -141,13 +141,13 @@ data "aws_iam_policy_document" "execution-role-policy" {
       actions = [
         "secretsmanager:GetSecretValue"
       ]
-      resources = [ "arn:aws:secretsmanager:${data.aws_region.current.name}:${local.account_id}:secret:${statement.value}-*"]
+      resources = ["arn:aws:secretsmanager:${data.aws_region.current.name}:${local.account_id}:secret:${statement.value}-*"]
     }
   }
 }
 
 resource "aws_iam_role_policy" "execution_role_policy" {
-  role = aws_iam_role.ecs_tasks_execution_role.id
-  name = "role_policy"
+  role   = aws_iam_role.ecs_tasks_execution_role.id
+  name   = "role_policy"
   policy = data.aws_iam_policy_document.execution-role-policy.json
 }

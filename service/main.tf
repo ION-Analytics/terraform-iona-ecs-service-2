@@ -12,14 +12,28 @@ resource "aws_ecs_service" "service" {
   enable_execute_command             = true
 
   deployment_circuit_breaker {
-    enable = var.deployment_circuit_breaker["enable"]
+    enable   = var.deployment_circuit_breaker["enable"]
     rollback = var.deployment_circuit_breaker["rollback"]
   }
 
-  load_balancer {
-    target_group_arn = var.target_group_arn
-    container_name   = var.container_name
-    container_port   = var.container_port
+  # Single container load balancer (original behavior)
+  dynamic "load_balancer" {
+    for_each = var.multiple_images ? [] : [1]
+    content {
+      target_group_arn = var.target_group_arn
+      container_name   = var.container_name
+      container_port   = var.container_port
+    }
+  }
+
+  # Multi-container load balancers
+  dynamic "load_balancer" {
+    for_each = var.multiple_images ? var.multi_container_load_balancers : []
+    content {
+      target_group_arn = load_balancer.value.target_group_arn
+      container_name   = load_balancer.value.container_name
+      container_port   = load_balancer.value.container_port
+    }
   }
 
   ordered_placement_strategy {
@@ -67,8 +81,9 @@ resource "aws_ecs_service" "service_multiple_loadbalancers" {
   health_check_grace_period_seconds  = var.health_check_grace_period_seconds
   enable_execute_command             = true
 
+  # Single container, multiple target groups (original behavior)
   dynamic "load_balancer" {
-    for_each = var.multiple_target_group_arns
+    for_each = var.multiple_images ? [] : var.multiple_target_group_arns
     content {
       target_group_arn = load_balancer.value
       container_name   = var.container_name
@@ -76,8 +91,18 @@ resource "aws_ecs_service" "service_multiple_loadbalancers" {
     }
   }
 
+  # Multi-container load balancers
+  dynamic "load_balancer" {
+    for_each = var.multiple_images ? var.multi_container_load_balancers : []
+    content {
+      target_group_arn = load_balancer.value.target_group_arn
+      container_name   = load_balancer.value.container_name
+      container_port   = load_balancer.value.container_port
+    }
+  }
+
   deployment_circuit_breaker {
-    enable = var.deployment_circuit_breaker["enable"]
+    enable   = var.deployment_circuit_breaker["enable"]
     rollback = var.deployment_circuit_breaker["rollback"]
   }
 
@@ -127,7 +152,7 @@ resource "aws_ecs_service" "service_no_loadbalancer" {
   enable_execute_command             = true
 
   deployment_circuit_breaker {
-    enable = var.deployment_circuit_breaker["enable"]
+    enable   = var.deployment_circuit_breaker["enable"]
     rollback = var.deployment_circuit_breaker["rollback"]
   }
 
@@ -176,7 +201,7 @@ resource "aws_ecs_service" "service_for_awsvpc_no_loadbalancer" {
   enable_execute_command             = true
 
   deployment_circuit_breaker {
-    enable = var.deployment_circuit_breaker["enable"]
+    enable   = var.deployment_circuit_breaker["enable"]
     rollback = var.deployment_circuit_breaker["rollback"]
   }
 

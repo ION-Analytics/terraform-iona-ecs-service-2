@@ -31,12 +31,24 @@ locals {
     "team"      = var.release["team"]
     "version"   = var.release["version"]
   })
+
+  # Extract container name from image path (e.g., "123.dkr.ecr.../my-app:v1" -> "my-app")
+  # Handles both tagged (image:tag) and untagged (image@digest or just image) formats
+  extract_container_name = { for idx, task in var.tasks : idx =>
+    replace(
+      element(split("/", task.image), length(split("/", task.image)) - 1),
+      "/[:@].*/",
+      ""
+    )
+  }
 }
 
 data "aws_region" "current" {}
 
+# Single container definition (original behavior when multiple_images = false)
 module "service_container_definition" {
   source = "./container-definition"
+  count  = var.multiple_images ? 0 : 1
 
   container_name      = "${var.release["component"]}${var.name_suffix}"
   container_image     = var.image_id != "" ? var.image_id : var.release["image_id"]
@@ -48,14 +60,14 @@ module "service_container_definition" {
   platform_secrets    = var.platform_secrets
   custom_secrets      = var.custom_secrets
   platform_config     = var.platform_config
-  port_mappings       = var.port != "0" ? [{ containerPort = var.port }] : []
+  port_mappings       = var.container_port_mappings != "" ? jsondecode(var.container_port_mappings) : (var.port != "0" ? [{ containerPort = var.port }] : [])
   mount_points        = [var.container_mountpoint]
   ulimits = [{
     name      = "nofile"
     hardLimit = 65535
     softLimit = var.nofile_soft_ulimit
   }]
-  log_configuration   = var.log_configuration != null ? var.log_configuration : null
+  log_configuration = var.log_configuration != null ? var.log_configuration : null
 
   map_environment = merge({
     "LOGSPOUT_CLOUDWATCHLOGS_LOG_GROUP_STDOUT" = "${local.full_service_name}-stdout"
@@ -84,37 +96,108 @@ module "service_container_definition" {
   extra_hosts = var.extra_hosts
 }
 
-locals {
-  complete_container_definition = concat(
-    [ for sidecar in local.firelens_container_definition : sidecar if var.firelens_configuration != null],
-    [ module.service_container_definition.json_map_object ]
+# Multiple container definitions (when multiple_images = true)
+module "multi_container_definitions" {
+  source   = "./container-definition"
+  for_each = var.multiple_images ? { for idx, task in var.tasks : idx => task } : {}
+
+  container_name      = "${var.release["component"]}-${local.extract_container_name[each.key]}"
+  container_image     = each.value.image
+  container_cpu       = each.value.cpu
+  privileged          = each.value.privileged
+  container_memory    = each.value.memory
+  stop_timeout        = tonumber(each.value.stop_timeout)
+  application_secrets = var.application_secrets
+  platform_secrets    = var.platform_secrets
+  custom_secrets      = var.custom_secrets
+  platform_config     = var.platform_config
+  port_mappings       = each.value.container_port_mappings != "" ? jsondecode(each.value.container_port_mappings) : (each.value.port != "0" ? [{ containerPort = each.value.port }] : [])
+  mount_points        = [var.container_mountpoint]
+  ulimits = [{
+    name      = "nofile"
+    hardLimit = 65535
+    softLimit = each.value.nofile_soft_ulimit
+  }]
+  log_configuration = var.log_configuration != null ? var.log_configuration : null
+
+  map_environment = merge({
+    "LOGSPOUT_CLOUDWATCHLOGS_LOG_GROUP_STDOUT" = "${local.full_service_name}-stdout"
+    "LOGSPOUT_CLOUDWATCHLOGS_LOG_GROUP_STDERR" = "${local.full_service_name}-stderr"
+    "STATSD_HOST"                              = "172.17.42.1"
+    "STATSD_PORT"                              = "8125"
+    "STATSD_ENABLED"                           = "true"
+    "ENV_NAME"                                 = var.env
+    "COMPONENT_NAME"                           = var.release["component"]
+    "VERSION"                                  = var.release["version"]
+    },
+    var.common_application_environment,
+    var.application_environment,
+    var.secrets,
   )
+  docker_labels = merge(
+    {
+      "component"             = var.release["component"]
+      "env"                   = var.env
+      "team"                  = var.release["team"]
+      "version"               = var.release["version"]
+      "com.datadoghq.ad.logs" = "[{\"source\": \"amazon_ecs\", \"service\": \"${local.full_service_name}\"}]"
+    },
+    each.value.container_labels,
+  )
+  extra_hosts = each.value.extra_hosts
+}
+
+locals {
+  # Build list of application container definitions
+  application_containers = var.multiple_images ? [
+    for idx, task in var.tasks : module.multi_container_definitions[idx].json_map_object
+    ] : [
+    module.service_container_definition[0].json_map_object
+  ]
+
+  complete_container_definition = concat(
+    [for sidecar in local.firelens_container_definition : sidecar if var.firelens_configuration != null],
+    local.application_containers
+  )
+
   firelens_container_definition = [{
-    name = "log_router_${var.release["component"]}${var.name_suffix}",
-    image = "public.ecr.aws/aws-observability/aws-for-fluent-bit:stable",
-    cpu = 0,
+    name              = "log_router_${var.release["component"]}${var.name_suffix}",
+    image             = "public.ecr.aws/aws-observability/aws-for-fluent-bit:stable",
+    cpu               = 0,
     memoryReservation = 51,
-    portMappings = [],
-    essential = true,
-    environment = [],
-    mountPoints = [],
-    volumesFrom = [],
-    user = "0",
+    portMappings      = [],
+    essential         = true,
+    environment       = [],
+    mountPoints       = [],
+    volumesFrom       = [],
+    user              = "0",
     logConfiguration = {
       logDriver = "awslogs",
       options = {
-        awslogs-group = "/ecs/ecs-aws-firelens-sidecar-container",
-        mode = "non-blocking",
-        awslogs-create-group = "true",
-        max-buffer-size = "25m",
-        awslogs-region = data.aws_region.current.name,
+        awslogs-group         = "/ecs/ecs-aws-firelens-sidecar-container",
+        mode                  = "non-blocking",
+        awslogs-create-group  = "true",
+        max-buffer-size       = "25m",
+        awslogs-region        = data.aws_region.current.name,
         awslogs-stream-prefix = "firelens"
       },
       secretOptions = []
     },
-    systemControls = [],
+    systemControls        = [],
     firelensConfiguration = var.firelens_configuration
   }]
+
+  # Build load balancer configurations for multi-container scenarios
+  # Maps container names to their target group ARNs and ports
+  multi_container_load_balancers = var.multiple_images ? flatten([
+    for idx, task in var.tasks : [
+      for tg_arn in task.target_group_arns : {
+        target_group_arn = tg_arn
+        container_name   = "${var.release["component"]}-${local.extract_container_name[idx]}"
+        container_port   = task.container_port_mappings != "" ? tonumber(jsondecode(task.container_port_mappings)[0].containerPort) : tonumber(task.port)
+      }
+    ] if length(task.target_group_arns) > 0
+  ]) : []
 }
 
 module "service" {
@@ -126,9 +209,10 @@ module "service" {
   task_definition                       = module.taskdef.arn
   container_name                        = "${var.release["component"]}${var.name_suffix}"
   container_port                        = var.port
-  desired_count                         = var.desired_count
+  desired_count                         = var.multiple_images ? 1 : var.desired_count
   target_group_arn                      = var.target_group_arn
   multiple_target_group_arns            = var.multiple_target_group_arns
+  multi_container_load_balancers        = local.multi_container_load_balancers
   deployment_minimum_healthy_percent    = var.deployment_minimum_healthy_percent
   deployment_maximum_percent            = var.deployment_maximum_percent
   network_configuration_subnets         = var.network_configuration_subnets
@@ -138,6 +222,7 @@ module "service" {
   capacity_providers                    = local.capacity_providers
   service_type                          = var.service_type
   deployment_circuit_breaker            = var.deployment_circuit_breaker
+  multiple_images                       = var.multiple_images
 }
 
 module "taskdef" {
@@ -155,6 +240,26 @@ module "taskdef" {
   placement_constraint_on_demand_only = var.placement_constraint_on_demand_only
   tags                                = local.tags
   custom_secrets                      = var.custom_secrets
+}
+
+# Validation checks
+resource "null_resource" "validate_multiple_images_config" {
+  lifecycle {
+    precondition {
+      condition     = !var.multiple_images || length(var.tasks) > 0
+      error_message = "When multiple_images is true, the tasks variable must contain at least one container configuration."
+    }
+
+    precondition {
+      condition     = var.multiple_images || length(var.tasks) == 0
+      error_message = "When multiple_images is false, the tasks variable must be empty. Use the standard image_id, cpu, memory, and port variables instead."
+    }
+
+    precondition {
+      condition     = var.multiple_images || (var.image_id != "" || var.release["image_id"] != "")
+      error_message = "When multiple_images is false, either image_id or release[\"image_id\"] must be provided."
+    }
+  }
 }
 
 module "ecs_update_monitor" {
@@ -292,7 +397,7 @@ resource "aws_appautoscaling_policy" "task_scaling_policy" {
 # Created only when service_type == "scheduled_task"
 
 locals {
-  is_scheduled_task   = var.service_type == "scheduled_task"
+  is_scheduled_task      = var.service_type == "scheduled_task"
   event_rule_name_prefix = length(local.full_service_name) > 31 ? format("%.24stf%.4s", local.full_service_name, sha1(local.full_service_name)) : local.full_service_name
 }
 

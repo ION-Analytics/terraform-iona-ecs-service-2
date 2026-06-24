@@ -14,8 +14,8 @@ resource "aws_iam_role" "role" {
     Statement = [
       {
         Action = "sts:AssumeRole",
-        Principal = { 
-          Service =  "ecs.amazonaws.com" 
+        Principal = {
+          Service = "ecs.amazonaws.com"
         },
         Effect = "Allow"
       }
